@@ -254,3 +254,27 @@ You can purge stale Reasoning Engine deployments at any time by running:
 uv run python cleanup_old_deployments.py --project=$GOOGLE_CLOUD_PROJECT_CONCIERGE --region=$REGION
 uv run python cleanup_old_deployments.py --project=$GOOGLE_CLOUD_PROJECT_SELLERS --region=$REGION
 ```
+
+---
+
+## Troubleshooting & Common Deployment Errors
+
+### 1. GCS Staging Bucket Creation Error (`storage.buckets.create` denied)
+* **Error**: `403 ... does not have storage.buckets.create access to the Google Cloud project.`
+* **Cause**: The Vertex AI SDK attempts to auto-create a staging bucket (`gs://<project>-staging`) if it does not already exist, which requires `storage.buckets.create` permission.
+* **Fix**: Create the GCS bucket beforehand using `gsutil` or Google Cloud Console, or pass an existing bucket via `--staging-bucket`:
+  ```bash
+  gsutil mb -p $GOOGLE_CLOUD_PROJECT_SELLERS -l $REGION gs://$GOOGLE_CLOUD_PROJECT_SELLERS-staging
+  # Or during deployment:
+  uv run python deploy_sellers_adk.py --project=$GOOGLE_CLOUD_PROJECT_SELLERS --region=$REGION --staging-bucket=gs://my-existing-bucket --gateway-name=$GATEWAY_NAME --gateway-project=$GOOGLE_CLOUD_PROJECT_GOVERNANCE
+  ```
+
+### 2. AI Platform Reasoning Engine Listing Error (`aiplatform.reasoningEngines.list` denied)
+* **Error**: `403 Permission 'aiplatform.reasoningEngines.list' denied on resource '//aiplatform.googleapis.com/projects/...'`
+* **Cause**: The deploying identity lacks permissions to list existing Reasoning Engines during the cleanup phase.
+* **Fix**: Ensure the deploying user or service account has been granted **Vertex AI Administrator** (`roles/aiplatform.admin`) or **AI Platform User** (`roles/aiplatform.user`). The deployment scripts include graceful exception handling to skip cleanup if listing permissions are absent.
+
+### 3. Missing Python Requirements (`cloudpickle`, `pydantic`)
+* **Error**: `The following requirements are missing: {'cloudpickle', 'pydantic'}`
+* **Fix**: `cloudpickle` and `pydantic` are explicitly defined in the `requirements` configuration block of `deploy_sellers_adk.py` and `deploy_concierge_adk.py` to ensure serialized reasoning engine runtimes package them correctly.
+
