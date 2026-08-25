@@ -20,24 +20,17 @@ import vertexai
 import agentplatform
 from dotenv import load_dotenv
 
-load_dotenv("seller_agents.env")
 load_dotenv()
-from cleanup_old_deployments import delete_old_deployments
 
 def main():
-    parser = argparse.ArgumentParser(description="Deploy Purchasing Concierge with Agent Identity and Agent Gateway")
-    parser.add_argument("--project", required=True, help="Google Cloud Project ID")
+    parser = argparse.ArgumentParser(description="Deploy Burger Seller Agent with Agent Identity and Agent Gateway")
+    parser.add_argument("--project", required=True, help="Google Cloud Project ID for deployment (e.g. deepakmichael-svc1)")
     parser.add_argument("--region", required=True, help="Google Cloud Region")
-    parser.add_argument("--staging-bucket", help="GCS bucket for staging")
-    parser.add_argument("--gateway-name", required=True, help="Agent Gateway name")
-    parser.add_argument("--gateway-project", help="Agent Gateway project ID (defaults to --project)")
+    parser.add_argument("--governance-project", required=True, help="Governance/Gateway Project ID (e.g. deepakmichaelprod)")
+    parser.add_argument("--gateway", required=True, help="Agent Gateway name")
     args = parser.parse_args()
 
-    gateway_project = args.gateway_project or args.project
-
-    staging_arg = args.staging_bucket or f"{args.project}-staging"
-    staging_bucket_name = staging_arg.removeprefix("gs://")
-    staging_bucket_uri = f"gs://{staging_bucket_name}"
+    staging_bucket_uri = f"gs://{args.governance_project}-shared-staging"
 
     vertexai.init(
         project=args.project,
@@ -45,22 +38,15 @@ def main():
         staging_bucket=staging_bucket_uri,
     )
 
-    print("Cleaning up old unused purchasing concierge deployments...")
-    delete_old_deployments(args.project, args.region, ["purchasing-concierge-adk"])
-
+    print("Initializing agentplatform Client...")
     client = agentplatform.Client(
         project=args.project,
         location=args.region,
         http_options=dict(api_version="v1beta1"),
     )
 
-    from purchasing_concierge.agent import root_agent
+    from burger_pkg.agent_adk import burger_agent as burger_adk_agent
     from vertexai.preview import reasoning_engines
-
-    adk_app = reasoning_engines.AdkApp(
-        agent=root_agent,
-        enable_tracing=False,
-    )
 
     class PlaygroundCompatibleAdkAgent:
         agent_framework = "google-adk"
@@ -69,7 +55,8 @@ def main():
             self.app = app
 
         def set_up(self):
-            self.app.set_up()
+            if hasattr(self.app, "set_up"):
+                self.app.set_up()
 
         def register_operations(self) -> dict[str, list[str]]:
             return {
@@ -127,9 +114,7 @@ def main():
             try:
                 res = self.app.query(message=message, user_id=effective_user_id, session_id=effective_session_id, **clean_kwargs)
                 if isinstance(res, dict):
-                    if "output" in res:
-                        return res
-                    return {"output": str(res)}
+                    return res
                 return {"output": str(res)}
             except Exception:
                 final_text = ""
@@ -155,47 +140,42 @@ def main():
             for chunk in self.stream_query(input=input, user_id=user_id, session_id=session_id, **kwargs):
                 yield chunk
 
-    playground_app = PlaygroundCompatibleAdkAgent(app=adk_app)
+    burger_app = reasoning_engines.AdkApp(agent=burger_adk_agent, enable_tracing=False)
+    burger_playground = PlaygroundCompatibleAdkAgent(burger_app)
+    gateway_path = args.gateway if args.gateway.startswith("projects/") else f"projects/{args.governance_project}/locations/{args.region}/agentGateways/{args.gateway}"
 
-    raw_env_vars = {
-        "GOOGLE_GENAI_USE_VERTEXAI": "true",
-        "AGENT_PROJECT_ID": args.project,
-        "AGENT_REGION": args.region,
-        "GOVERNANCE_PROJECT_ID": gateway_project,
-        "PIZZA_SELLER_AGENT_ID": os.environ.get("PIZZA_SELLER_AGENT_ID", ""),
-        "BURGER_SELLER_AGENT_ID": os.environ.get("BURGER_SELLER_AGENT_ID", ""),
-    }
-    filtered_env_vars = {k: v for k, v in raw_env_vars.items() if v}
-
-    concierge_config = {
+    burger_config = {
         "staging_bucket": staging_bucket_uri,
-        "display_name": "purchasing-concierge-adk",
+        "display_name": "burger-seller-agent-adk",
         "requirements": [
             "google-cloud-aiplatform[agent_engines]>=1.149.0",
             "google-adk[a2a,agent-identity]==1.34.0",
-            "cloudpickle",
-            "pydantic",
+            "cloudpickle>=3.0.0",
+            "pydantic>=2.0.0",
         ],
-        "extra_packages": [
-            "./purchasing_concierge",
-        ],
+        "extra_packages": ["./burger_pkg"],
         "identity_type": "AGENT_IDENTITY",
         "agent_gateway_config": {
             "agent_to_anywhere_config": {
-                "agent_gateway": f"projects/{gateway_project}/locations/{args.region}/agentGateways/{args.gateway_name}"
+                "agent_gateway": gateway_path
             }
         },
-        "env_vars": filtered_env_vars,
+        "env_vars": {
+            "GOOGLE_GENAI_USE_VERTEXAI": "true",
+            "AGENT_PROJECT_ID": args.project,
+            "AGENT_REGION": args.region,
+        }
     }
 
-    print("Deploying Purchasing Concierge with Agent Identity & Agent Gateway...")
-    deployed_concierge = client.agent_engines.create(
-        agent=playground_app,
-        config=concierge_config,
-    )
-    concierge_name = deployed_concierge.api_resource.name
-    print(f"Purchasing Concierge deployed: {concierge_name}")
-    print(f"Concierge ID: {concierge_name}")
+    print("Deploying Burger Agent with Agent Identity & Agent Gateway...")
+    print("Calling client.agent_engines.create...")
+    deployed_burger = client.agent_engines.create(agent=burger_playground, config=burger_config)
+    burger_name = deployed_burger.api_resource.name
+    print(f"Burger Agent deployed: {burger_name}")
+
+    with open("burger_agent.env", "w") as f:
+        f.write(f"BURGER_SELLER_AGENT_ID={burger_name}\n")
+    print("Saved burger agent ID to burger_agent.env")
 
 if __name__ == "__main__":
     main()
