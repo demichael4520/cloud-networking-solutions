@@ -161,22 +161,50 @@ export REGION="us-central1"
 export GATEWAY_NAME="centralized-agw"
 ```
 
+### Step 0: Pre-create Consolidated Central Staging Bucket
+
+To limit storage usage and prevent bucket proliferation across multiple runtime projects, create a single shared GCS staging bucket in your Centralized Governance Project:
+
+1. Create the central shared bucket using the recommended `gcloud storage` CLI:
+   ```bash
+   gcloud storage buckets create gs://$GOOGLE_CLOUD_PROJECT_GOVERNANCE-shared-staging \
+     --project=$GOOGLE_CLOUD_PROJECT_GOVERNANCE \
+     --location=$REGION
+   ```
+2. Grant cross-project IAM read/write access (`storage.objectAdmin`) to each runtime project's Vertex AI service agent using `gcloud storage`:
+   ```bash
+   # Get project numbers
+   export CONCIERGE_PROJECT_NUMBER=$(gcloud projects describe $GOOGLE_CLOUD_PROJECT_CONCIERGE --format="value(projectNumber)")
+   export SELLERS_PROJECT_NUMBER=$(gcloud projects describe $GOOGLE_CLOUD_PROJECT_SELLERS --format="value(projectNumber)")
+
+   # Grant access
+   gcloud storage buckets add-iam-policy-binding gs://$GOOGLE_CLOUD_PROJECT_GOVERNANCE-shared-staging \
+     --member="serviceAccount:service-${CONCIERGE_PROJECT_NUMBER}@gcp-sa-aiplatform.iam.gserviceaccount.com" \
+     --role="roles/storage.objectAdmin"
+
+   gcloud storage buckets add-iam-policy-binding gs://$GOOGLE_CLOUD_PROJECT_GOVERNANCE-shared-staging \
+     --member="serviceAccount:service-${SELLERS_PROJECT_NUMBER}@gcp-sa-aiplatform.iam.gserviceaccount.com" \
+     --role="roles/storage.objectAdmin"
+   ```
+
 ### Step 1: Deploy Seller Agents
-Deploy both the Burger and Pizza seller agents to `agent-runtime2`, binding them to the Agent Gateway and Agent Identity:
+Deploy both the Burger and Pizza seller agents to `agent-runtime2`, utilizing the consolidated central staging bucket:
 ```bash
 uv run python deploy_sellers_adk.py \
   --project=$GOOGLE_CLOUD_PROJECT_SELLERS \
   --region=$REGION \
+  --staging-bucket=gs://$GOOGLE_CLOUD_PROJECT_GOVERNANCE-shared-staging \
   --gateway-name=$GATEWAY_NAME \
   --gateway-project=$GOOGLE_CLOUD_PROJECT_GOVERNANCE
 ```
 
 ### Step 2: Deploy Purchasing Concierge (Root Agent)
-Deploy the root orchestrator to `agent-runtime1`, configuring it with the same Agent Gateway for secure A2A egress routing and Agent Registry autodiscovery capabilities:
+Deploy the root orchestrator to `agent-runtime1`, utilizing the consolidated central staging bucket:
 ```bash
 uv run python deploy_concierge_adk.py \
   --project=$GOOGLE_CLOUD_PROJECT_CONCIERGE \
   --region=$REGION \
+  --staging-bucket=gs://$GOOGLE_CLOUD_PROJECT_GOVERNANCE-shared-staging \
   --gateway-name=$GATEWAY_NAME \
   --gateway-project=$GOOGLE_CLOUD_PROJECT_GOVERNANCE
 ```
@@ -262,11 +290,11 @@ uv run python cleanup_old_deployments.py --project=$GOOGLE_CLOUD_PROJECT_SELLERS
 ### 1. GCS Staging Bucket Creation Error (`storage.buckets.create` denied)
 * **Error**: `403 ... does not have storage.buckets.create access to the Google Cloud project.`
 * **Cause**: The Vertex AI SDK attempts to auto-create a staging bucket (`gs://<project>-staging`) if it does not already exist, which requires `storage.buckets.create` permission.
-* **Fix**: Create the GCS bucket beforehand using `gsutil` or Google Cloud Console, or pass an existing bucket via `--staging-bucket`:
+* **Fix**: Pre-create the central shared staging bucket using the recommended `gcloud storage` CLI (Step 0) or pass an existing bucket via `--staging-bucket`:
   ```bash
-  gsutil mb -p $GOOGLE_CLOUD_PROJECT_SELLERS -l $REGION gs://$GOOGLE_CLOUD_PROJECT_SELLERS-staging
-  # Or during deployment:
-  uv run python deploy_sellers_adk.py --project=$GOOGLE_CLOUD_PROJECT_SELLERS --region=$REGION --staging-bucket=gs://my-existing-bucket --gateway-name=$GATEWAY_NAME --gateway-project=$GOOGLE_CLOUD_PROJECT_GOVERNANCE
+  gcloud storage buckets create gs://$GOOGLE_CLOUD_PROJECT_GOVERNANCE-shared-staging \
+    --project=$GOOGLE_CLOUD_PROJECT_GOVERNANCE \
+    --location=$REGION
   ```
 
 ### 2. AI Platform Reasoning Engine Listing Error (`aiplatform.reasoningEngines.list` denied)
@@ -276,5 +304,14 @@ uv run python cleanup_old_deployments.py --project=$GOOGLE_CLOUD_PROJECT_SELLERS
 
 ### 3. Missing Python Requirements (`cloudpickle`, `pydantic`)
 * **Error**: `The following requirements are missing: {'cloudpickle', 'pydantic'}`
-* **Fix**: `cloudpickle` and `pydantic` are explicitly defined in the `requirements` configuration block of `deploy_sellers_adk.py` and `deploy_concierge_adk.py` to ensure serialized reasoning engine runtimes package them correctly.
+* **Fix**: `cloudpickle` and `pydantic` are explicitly defined in the `requirements` configuration block of `deploy_sellers_adk.py` and `deploy_concierge_adk.py`.
+
+### 4. GCS Bucket Access / ADC Authentication Mismatch (`storage.buckets.get` denied)
+* **Error**: `403 GET ... does not have storage.buckets.get access to the Google Cloud Storage bucket.`
+* **Cause**: Application Default Credentials (ADC) are authenticated as an alternate account (`admin@deepakmichael.altostrat.com`) which lacks permissions on the shared staging bucket, even though your active `gcloud` CLI user has access.
+* **Fix**: Re-authenticate Application Default Credentials using your active Google Cloud account:
+  ```bash
+  gcloud auth application-default login
+  ```
+
 

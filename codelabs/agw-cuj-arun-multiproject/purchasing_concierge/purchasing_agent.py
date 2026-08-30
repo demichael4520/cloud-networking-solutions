@@ -106,7 +106,7 @@ Current active seller agent: {current_agent["active_agent"]}
         return {"active_agent": "None"}
 
     async def before_agent_callback(self, callback_context: CallbackContext):
-        if not self.a2a_client_init_status:
+        if not self.a2a_client_init_status or "burger_seller_agent" not in self.agent_ids:
             governance_project = (
                 os.getenv("GOVERNANCE_PROJECT_ID")
                 or os.getenv("AGENT_GATEWAY_PROJECT_ID")
@@ -125,7 +125,7 @@ Current active seller agent: {current_agent["active_agent"]}
                 import requests
                 import re
 
-                credentials, _ = google.auth.default()
+                credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
                 auth_req = google.auth.transport.requests.Request()
                 credentials.refresh(auth_req)
 
@@ -155,6 +155,10 @@ Current active seller agent: {current_agent["active_agent"]}
                             discovered_agents["pizza_seller_agent"] = resource_path
                             discovered_agents["pizza-seller-agent-adk"] = resource_path
 
+                    print(f"Successfully auto-discovered agents from registry: {discovered_agents}")
+                else:
+                    print(f"Warning: Agent Registry request to {url} returned HTTP {resp.status_code}: {resp.text}")
+
                 if discovered_agents:
                     self.agent_ids.update(discovered_agents)
             except Exception as e:
@@ -174,7 +178,8 @@ Current active seller agent: {current_agent["active_agent"]}
                 if name in self.agent_ids or name in self.agent_urls:
                     agent_info.append(json.dumps({"name": meta["name"], "description": meta["description"]}))
             self.agents = "\n".join(agent_info)
-            self.a2a_client_init_status = True
+            if "burger_seller_agent" in self.agent_ids or "pizza_seller_agent" in self.agent_ids:
+                self.a2a_client_init_status = True
 
     async def before_model_callback(
         self, callback_context: CallbackContext, llm_request
@@ -212,12 +217,18 @@ Current active seller agent: {current_agent["active_agent"]}
         if not agent_id:
             return f"Error: ID for agent {agent_name} not found"
 
+        if not agent_id.startswith("projects/"):
+            seller_project = os.getenv("SELLER_PROJECT_ID", "1015660890618")
+            location = os.getenv("AGENT_REGION", "us-central1")
+            agent_id = f"projects/{seller_project}/locations/{location}/reasoningEngines/{agent_id}"
+
         try:
             print(f"Calling remote agent {agent_name} (ID: {agent_id}) with task: {task}")
             if agent_id.startswith("projects/"):
-                target_project = agent_id.split("/")[1]
+                parts = agent_id.split("/")
+                target_project = parts[1]
             else:
-                target_project = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("AGENT_PROJECT_ID") or "agent-runtime1"
+                target_project = os.getenv("PROJECT_SELLERS") or os.getenv("GOOGLE_CLOUD_PROJECT") or "agent-runtime2"
             location = os.getenv("AGENT_REGION") or os.getenv("GOOGLE_CLOUD_LOCATION") or "us-central1"
             vertexai.init(project=target_project, location=location)
             engine = reasoning_engines.ReasoningEngine(agent_id)
