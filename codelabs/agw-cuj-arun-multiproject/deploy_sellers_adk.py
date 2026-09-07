@@ -200,7 +200,7 @@ def main():
     print("Deploying Burger Agent with Agent Identity & Agent Gateway...")
     burger_app = reasoning_engines.AdkApp(agent=burger_adk_agent, session_service_builder=lambda: InMemorySessionService(), enable_tracing=False)
     burger_playground = PlaygroundCompatibleAdkAgent(burger_app)
-    burger_config = {**common_config, "display_name": "burger-seller-agent-adk"}
+    burger_config = {**common_config, "display_name": "burger-seller-agent-adk", "gcs_dir_name": "burger_agent"}
     deployed_burger = client.agent_engines.create(agent=burger_playground, config=burger_config)
     burger_name = deployed_burger.api_resource.name
     print(f"Burger Agent deployed: {burger_name}")
@@ -209,7 +209,7 @@ def main():
     print("Deploying Pizza Agent with Agent Identity & Agent Gateway...")
     pizza_app = reasoning_engines.AdkApp(agent=pizza_adk_agent, session_service_builder=lambda: InMemorySessionService(), enable_tracing=False)
     pizza_playground = PlaygroundCompatibleAdkAgent(pizza_app)
-    pizza_config = {**common_config, "display_name": "pizza-seller-agent-adk"}
+    pizza_config = {**common_config, "display_name": "pizza-seller-agent-adk", "gcs_dir_name": "pizza_agent"}
     deployed_pizza = client.agent_engines.create(agent=pizza_playground, config=pizza_config)
     pizza_name = deployed_pizza.api_resource.name
     print(f"Pizza Agent deployed: {pizza_name}")
